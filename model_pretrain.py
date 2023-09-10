@@ -73,8 +73,8 @@ def parse_args():
 		'-frame_interval', type=int, required=True,
 		help='the intervals of frame sampling')
 	parser.add_argument(
-		'-data_statics', type=str, default='kinetics',
-		help='choose data statics from [imagenet, kinetics]')
+		'-data_statics', type=str, default='sinus',
+		help='choose data statics from [imagenet, sinus]')
 	parser.add_argument(
 		'-train_data_path', type=str, required=True,
 		help='the path to train set')

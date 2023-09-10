@@ -4,6 +4,7 @@ import random
 import decord
 import numpy as np
 import torch
+import pandas as pd
 
 from einops import rearrange
 from skimage.feature import hog
@@ -45,52 +46,37 @@ def extract_hog_features(image):
 	return hog_features
 
 
-def load_annotation_data(data_file_path):
-	with open(data_file_path, 'r') as data_file:
-		return json.load(data_file)
+def load_annotations(ann_file, num_samples_per_cls):
+    df = pd.read_csv(ann_file)
+    
+    dataset = []
+    cls_sample_cnt = {}
+    
+    # Create a mapping from label to index
+    unique_labels = df['label'].unique()
+    class_to_idx = {label: idx for idx, label in enumerate(unique_labels)}
+    
+    for _, row in df.iterrows():
+        sample = {}
+        
+        video_path = row['video_path']
+        start_idx = row['start']
+        end_idx = row['end']
+        label = row['label']
 
+        sample['video'] = video_path
+        sample['start'] = start_idx
+        sample['end'] = end_idx
+        class_name = label
+        class_index = class_to_idx[class_name]
 
-def get_class_labels(num_class, anno_pth='./k400_classmap.json'):
-	global class_labels_map, cls_sample_cnt
-	
-	if class_labels_map is not None:
-		return class_labels_map, cls_sample_cnt
-	else:
-		cls_sample_cnt = {}
-		class_labels_map = load_annotation_data(anno_pth)
-		for cls in class_labels_map:
-			cls_sample_cnt[cls] = 0
-		return class_labels_map, cls_sample_cnt
+        # Ensure we don't exceed the samples per class limit
+        if cls_sample_cnt.get(class_name, 0) < num_samples_per_cls:
+            sample['label'] = class_index
+            dataset.append(sample)
+            cls_sample_cnt[class_name] = cls_sample_cnt.get(class_name, 0) + 1
 
-
-def load_annotations(ann_file, num_class, num_samples_per_cls):
-	dataset = []
-	class_to_idx, cls_sample_cnt = get_class_labels(num_class)
-	with open(ann_file, 'r') as fin:
-		for line in fin:
-			line_split = line.strip().split('\t')
-			sample = {}
-			idx = 0
-			# idx for frame_dir
-			frame_dir = line_split[idx]
-			sample['video'] = frame_dir
-			idx += 1
-								
-			# idx for label[s]
-			label = [x for x in line_split[idx:]]
-			assert label, f'missing label in line: {line}'
-			assert len(label) == 1
-			class_name = label[0]
-			class_index = int(class_to_idx[class_name])
-			
-			# choose a class subset of whole dataset
-			if class_index < num_class:
-				sample['label'] = class_index
-				if cls_sample_cnt[class_name] < num_samples_per_cls:
-					dataset.append(sample)
-					cls_sample_cnt[class_name]+=1
-
-	return dataset
+    return dataset, class_to_idx
 
 
 class DecordInit(object):
@@ -119,8 +105,8 @@ class DecordInit(object):
 		return repr_str
 
 
-class Kinetics(torch.utils.data.Dataset):
-	"""Load the Kinetics video files
+class Sinus(torch.utils.data.Dataset):
+	"""Load the Sinus video files
 	
 	Args:
 		annotation_path (string): Annotation file path.
@@ -137,7 +123,7 @@ class Kinetics(torch.utils.data.Dataset):
 				 transform=None,
 				 temporal_sample=None):
 		self.configs = configs
-		self.data = load_annotations(annotation_path, self.configs.num_class, self.configs.num_samples_per_cls)
+		self.data, self.class_to_idx = load_annotations(annotation_path, self.configs.num_samples_per_cls)
 
 		self.transform = transform
 		self.temporal_sample = temporal_sample
@@ -153,11 +139,10 @@ class Kinetics(torch.utils.data.Dataset):
 		while True:
 			try:
 				path = self.data[index]['video']
+				start_frame_ind = self.data[index]['start']
+				end_frame_ind = self.data[index]['end']
 				v_reader = self.v_decoder(path)
-				total_frames = len(v_reader)
-				
-				# Sampling video frames
-				start_frame_ind, end_frame_ind = self.temporal_sample(total_frames)
+            
 				assert end_frame_ind-start_frame_ind >= self.target_video_len
 				frame_indice = np.linspace(start_frame_ind, end_frame_ind-1, self.target_video_len, dtype=int)
 				video = v_reader.get_batch(frame_indice).asnumpy()
@@ -206,81 +191,3 @@ class Kinetics(torch.utils.data.Dataset):
 
 	def __len__(self):
 		return len(self.data)
-
-
-if __name__ == '__main__':
-	# Unit test for loading video and computing time cost
-	import data_transform as T
-	import time
-	path = './YABnJL_bDzw.mp4'
-	color_jitter = 0.4
-	auto_augment = 'rand-m9-mstd0.5-inc1'
-	scale = None
-	mean, std = (0.45, 0.45, 0.45), (0.225, 0.225, 0.225)
-	transform = T.create_video_transform(
-		input_size=224,
-		is_training=True,
-		scale=scale,
-		hflip=0.5,
-		color_jitter=color_jitter,
-		auto_augment=auto_augment,
-		interpolation='bicubic',
-		mean=mean,
-		std=std)
-	
-	v_decoder = DecordInit()
-	v_reader = v_decoder(path)
-	total_frames = len(v_reader)
-	target_video_len = 16
-	# Sampling video frames
-	temporal_sample = T.TemporalRandomCrop(target_video_len*16)
-	start_frame_ind, end_frame_ind = temporal_sample(total_frames)
-	frame_indice = np.linspace(start_frame_ind, end_frame_ind-1, target_video_len, dtype=int)
-	video = v_reader.get_batch(frame_indice).asnumpy()
-	del v_reader
-	
-	# Video align transform: T C H W
-	with torch.no_grad():
-		video = torch.from_numpy(video).permute(0,3,1,2)
-		if transform is not None:
-			video = transform(video)
-	
-	show_processed_image(video.permute(0,2,3,1), save_dir='./', mean=mean, std=std)
-	'''
-	mask_generator = CubeMaskGenerator(input_size=(8,14,14),min_num_patches=16)
-	counts = 1
-	while True:
-		if counts > 100:
-			break
-		start_time = time.perf_counter()
-		v_decoder = DecordInit()
-		v_reader = v_decoder(path)
-		# Sampling video frames
-		total_frames = len(v_reader)
-		align_transform = T.Compose([
-			T.RandomResizedCrop(size=(224, 224), area_range=(0.5, 1.0), interpolation=3), #InterpolationMode.BICUBIC
-			T.Flip(),
-			])
-		temporal_sample = T.TemporalRandomCrop(16*4)
-		start_frame_ind, end_frame_ind = temporal_sample(total_frames)
-		frame_indice = np.linspace(0, end_frame_ind-start_frame_ind-1, 
-								   16, dtype=int)
-		video = v_reader.get_batch(frame_indice).asnumpy()
-		del v_reader
-		
-		# Video align transform: T C H W
-		with torch.no_grad():
-			video = torch.from_numpy(video).permute(0,3,1,2)
-			align_transform.randomize_parameters()
-			video = align_transform(video)
-		#label = np.stack(list(map(extract_hog_features, video.permute(0,2,3,1).numpy())), axis=0) # T H W C -> T H' W' C'
-		_, hog_image = hog(video.permute(0,2,3,1).numpy()[0][:,:,2], orientations=9, pixels_per_cell=(8, 8), cells_per_block=(1, 1), block_norm='L2', feature_vector=False, visualize=True)
-		mask, cube_marker = mask_generator() # T' H' W'
-		counts += 1
-		print(f'{(time.perf_counter()-start_time):.3f}')
-	print('finish')
-	'''
-	#_, hog_image = hog(video.permute(0,2,3,1).numpy()[0][:,:,2], orientations=9, pixels_per_cell=(8, 8), cells_per_block=(1, 1), block_norm='L2', feature_vector=False, visualize=True)
-	#from skimage import io
-	#io.imsave('./test_img_hog.jpg',hog_image)
-	#show_processed_image(video.permute(0,2,3,1), save_dir='./')

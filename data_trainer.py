@@ -4,7 +4,7 @@ import torch
 import torch.nn as nn
 from torch.utils.data.dataloader import DataLoader
 
-from dataset import Kinetics
+from dataset import Sinus
 import data_transform as T
 
 class Collator(object):
@@ -35,7 +35,7 @@ class Collator(object):
 		
 		return minibatch
 
-class KineticsDataModule(pl.LightningDataModule):
+class SinusDataModule(pl.LightningDataModule):
 	def __init__(self, 
 				 configs,
 				 train_ann_path,
@@ -49,7 +49,7 @@ class KineticsDataModule(pl.LightningDataModule):
 		self.configs = configs
 
 	def get_dataset(self, annotation_path, transform, temporal_sample):
-		dataset = Kinetics(
+		dataset = Sinus(
 			self.configs,
 			annotation_path,
 			transform=transform,
@@ -67,7 +67,7 @@ class KineticsDataModule(pl.LightningDataModule):
 		
 		if self.configs.data_statics == 'imagenet':
 			mean, std = (0.485, 0.456, 0.406), (0.229, 0.224, 0.225)
-		elif self.configs.data_statics == 'kinetics':
+		elif self.configs.data_statics == 'sinus':
 			mean, std = (0.45, 0.45, 0.45), (0.225, 0.225, 0.225)
 		else:
 			mean, std = (0.5, 0.5, 0.5), (0.5, 0.5, 0.5)
