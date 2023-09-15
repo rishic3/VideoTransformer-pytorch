@@ -46,37 +46,22 @@ def extract_hog_features(image):
 	return hog_features
 
 
-def load_annotations(ann_file, num_samples_per_cls):
-    df = pd.read_csv(ann_file)
-    
-    dataset = []
-    cls_sample_cnt = {}
-    
-    # Create a mapping from label to index
-    unique_labels = df['label'].unique()
-    class_to_idx = {label: idx for idx, label in enumerate(unique_labels)}
-    
-    for _, row in df.iterrows():
-        sample = {}
-        
-        video_path = row['video_path']
-        start_idx = row['start']
-        end_idx = row['end']
-        label = row['label']
-
-        sample['video'] = video_path
-        sample['start'] = start_idx
-        sample['end'] = end_idx
-        class_name = label
-        class_index = class_to_idx[class_name]
-
-        # Ensure we don't exceed the samples per class limit
-        if cls_sample_cnt.get(class_name, 0) < num_samples_per_cls:
-            sample['label'] = class_index
-            dataset.append(sample)
-            cls_sample_cnt[class_name] = cls_sample_cnt.get(class_name, 0) + 1
-
-    return dataset, class_to_idx
+def load_annotations(annotation_path):
+    data_df = pd.read_csv(annotation_path)
+    data = []
+    class_to_idx = {}  # I'm assuming you want a mapping of label to some index, based on your current code
+    unique_labels = data_df['label'].unique()
+    for idx, label in enumerate(unique_labels):
+        class_to_idx[label] = idx
+    for _, row in data_df.iterrows():
+        entry = {
+            'video': row['video_path'],
+            'start': row['start'],
+            'end': row['end'],
+            'label': class_to_idx[row['label']]  # Assuming you want label indices instead of string
+        }
+        data.append(entry)
+    return data, class_to_idx
 
 
 class DecordInit(object):
@@ -109,7 +94,7 @@ class Sinus(torch.utils.data.Dataset):
 	"""Load the Sinus video files
 	
 	Args:
-		annotation_path (string): Annotation file path.
+		annotation_path (string): CSV file path.
 		num_class (int): The number of the class.
 		num_samples_per_cls (int): the max samples used in each class.
 		target_video_len (int): the number of video frames will be load.
@@ -123,7 +108,7 @@ class Sinus(torch.utils.data.Dataset):
 				 transform=None,
 				 temporal_sample=None):
 		self.configs = configs
-		self.data, self.class_to_idx = load_annotations(annotation_path, self.configs.num_samples_per_cls)
+		self.data, self.class_to_idx = load_annotations(annotation_path)
 
 		self.transform = transform
 		self.temporal_sample = temporal_sample

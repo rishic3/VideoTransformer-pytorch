@@ -551,7 +551,7 @@ class ViViT(nn.Module):
 			else:
 				x = x + self.time_embed.type_as(x).detach()
 			x = self.drop_after_time(x)
-			print(x.shape)
+			print("x:", x.shape)
 			x = temporal_transformer(x, return_attention=True)
 		return x
 
@@ -966,7 +966,7 @@ if __name__ == '__main__':
 	import argparse
 	hparams = parse_args()
 	optimizer = build_optimizer(hparams, model, is_pretrain=False)
-	print(optimizer)
+	print("optim:", optimizer)
 	
 	'''
 	model = TimeSformer(num_frames=4,

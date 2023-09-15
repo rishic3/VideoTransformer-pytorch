@@ -1,4 +1,6 @@
 import numpy as np
+import os
+import pandas as pd
 import pytorch_lightning as pl
 import torch
 import torch.nn as nn
@@ -36,25 +38,18 @@ class Collator(object):
 		return minibatch
 
 class SinusDataModule(pl.LightningDataModule):
-	def __init__(self, 
-				 configs,
-				 train_ann_path,
-				 val_ann_path=None,
-				 test_ann_path=None,
-				 ):
+	def __init__(self, configs, data_directory):
 		super().__init__()
-		self.train_ann_path = train_ann_path
-		self.val_ann_path = val_ann_path
-		self.test_ann_path = test_ann_path
+		self.data_directory = data_directory
 		self.configs = configs
-
-	def get_dataset(self, annotation_path, transform, temporal_sample):
+	
+	def get_dataset(self, csv_filename, transform, temporal_sample):
+		csv_path = os.path.join(self.data_directory, csv_filename)
 		dataset = Sinus(
 			self.configs,
-			annotation_path,
+			csv_path,
 			transform=transform,
 			temporal_sample=temporal_sample)
-		
 		return dataset
 
 	def setup(self, stage):
@@ -85,40 +80,28 @@ class SinusDataModule(pl.LightningDataModule):
 			std=std)
 		train_temporal_sample = T.TemporalRandomCrop(
 			self.configs.num_frames * self.configs.frame_interval)
-			
-		self.train_dataset = self.get_dataset(
-			self.train_ann_path,
-			train_transform,
-			train_temporal_sample)
-		
-		if self.val_ann_path is not None:
-			val_transform = T.create_video_transform(
-				input_size=self.configs.img_size,
-				is_training=False,
-				interpolation='bicubic',
-				mean=mean,
-				std=std)
-			val_temporal_sample = T.TemporalRandomCrop(
-				self.configs.num_frames * self.configs.frame_interval)
-			self.val_dataset = self.get_dataset(
-				self.val_ann_path,
-				val_transform,
-				val_temporal_sample)
-		
-		if self.test_ann_path is not None:
-			# need to update
-			test_transform = T.Compose([
-				T.Resize(scale_range=(-1, 256)),
-				T.ThreeCrop(size=self.configs.img_size),
-				T.ToTensor(),
-				T.Normalize(mean, std),
-				])
-			test_temporal_sample = T.TemporalRandomCrop(
-				self.configs.num_frames * self.configs.frame_interval)
-			self.test_dataset = self.get_dataset(
-				self.test_ann_path,
-				test_transform,
-				test_temporal_sample)
+
+		self.train_dataset = self.get_dataset('train.csv', train_transform, train_temporal_sample)
+	
+		val_transform = T.create_video_transform(
+			input_size=self.configs.img_size,
+			is_training=False,
+			interpolation='bicubic',
+			mean=mean,
+			std=std)
+		val_temporal_sample = T.TemporalRandomCrop(
+			self.configs.num_frames * self.configs.frame_interval)
+		self.val_dataset = self.get_dataset('valid.csv', val_transform, val_temporal_sample)
+
+		test_transform = T.Compose([
+			T.Resize(scale_range=(-1, 256)),
+			T.ThreeCrop(size=self.configs.img_size),
+			T.ToTensor(),
+			T.Normalize(mean, std),
+			])
+		test_temporal_sample = T.TemporalRandomCrop(
+			self.configs.num_frames * self.configs.frame_interval)
+		self.test_dataset = self.get_dataset('test.csv', test_transform, test_temporal_sample)
 
 	def train_dataloader(self):
 		return DataLoader(
@@ -132,7 +115,7 @@ class SinusDataModule(pl.LightningDataModule):
 		)
 	
 	def val_dataloader(self):
-		if self.val_ann_path is not None:
+		if hasattr(self, 'val_dataset'):
 			return DataLoader(
 				self.val_dataset,
 				batch_size=self.configs.batch_size,
@@ -141,9 +124,9 @@ class SinusDataModule(pl.LightningDataModule):
 				shuffle=False,
 				drop_last=False,
 			)
-	
+
 	def test_dataloader(self):
-		if self.test_ann_path is not None:
+		if hasattr(self, 'test_dataset'):
 			return DataLoader(
 				self.test_dataset,
 				batch_size=self.configs.batch_size,

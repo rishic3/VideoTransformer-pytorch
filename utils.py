@@ -10,6 +10,7 @@ from pytorch_lightning.utilities.rank_zero import rank_zero_only
 
 @rank_zero_only
 def print_on_rank_zero(content):
+	print("rank zero print:")
 	if is_main_process():	
 		print(content)
 	

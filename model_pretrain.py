@@ -7,12 +7,12 @@ import argparse
 import kornia.augmentation as K
 import numpy as np
 import pytorch_lightning as pl
-from pytorch_lightning.plugins import DDPPlugin
+from pytorch_lightning.strategies import DDPStrategy
 from pytorch_lightning.callbacks import LearningRateMonitor, ModelCheckpoint
 import torch
 import torch.utils.data as data
 
-from data_trainer import KineticsDataModule
+from data_trainer import SinusDataModule
 from model_trainer import VideoTransformer
 import data_transform as T
 from utils import print_on_rank_zero
@@ -76,14 +76,8 @@ def parse_args():
 		'-data_statics', type=str, default='sinus',
 		help='choose data statics from [imagenet, sinus]')
 	parser.add_argument(
-		'-train_data_path', type=str, required=True,
-		help='the path to train set')
-	parser.add_argument(
-		'-val_data_path', type=str, default=None,
-		help='the path to val set')
-	parser.add_argument(
-		'-test_data_path', type=str, default=None,
-		help='the path to test set')
+        '-data_directory', type=str, required=True,
+        help='the path to the directory containing all data')
 	parser.add_argument(
 		'-multi_crop', type=bool, default=False, 
 		help="""Whether or not to use multi crop.""")
@@ -167,11 +161,6 @@ def single_run():
 	ROOT_DIR = args.root_dir
 	exp_tag = (f'objective_{args.objective}_arch_{args.arch}_lr_{args.lr}_'
 			   f'optim_{args.optim_type}_lr_schedule_{args.lr_schedule}_'
-			   f'fp16_{args.use_fp16}_weight_decay_{args.weight_decay}_'
-			   f'weight_decay_end_{args.weight_decay_end}_warmup_epochs_{args.warmup_epochs}_'
-			   f'pretrain_{args.pretrain_pth}_weights_from_{args.weights_from}_seed_{args.seed}_'
-			   f'img_size_{args.img_size}_num_frames_{args.num_frames}_eval_metrics_{args.eval_metrics}_'
-			   f'frame_interval_{args.frame_interval}_mixup_{args.mixup}_'
 			   f'multi_crop_{args.multi_crop}_auto_augment_{args.auto_augment}_')
 	ckpt_dir = os.path.join(ROOT_DIR, f'results/{exp_tag}/ckpt')
 	log_dir = os.path.join(ROOT_DIR, f'results/{exp_tag}/log')
@@ -179,13 +168,16 @@ def single_run():
 	os.makedirs(log_dir, exist_ok=True)
 
 	# Data
+	'''
 	do_eval = True if args.val_data_path is not None else False
 	do_test = True if args.test_data_path is not None else False
-	
-	data_module = KineticsDataModule(configs=args,
-									 train_ann_path=args.train_data_path,
-									 val_ann_path=args.val_data_path,
-									 test_ann_path=args.test_data_path)
+	'''
+	do_eval = True
+	do_test = True
+
+	data_module = SinusDataModule(configs=args,
+                                 data_directory=args.data_directory,
+								 )
 	
 	# Resume from the last checkpoint
 	if args.resume and not args.resume_from_checkpoint:
@@ -198,19 +190,16 @@ def single_run():
 		find_unused_parameters = False
 
 	trainer = pl.Trainer(
-		gpus=args.gpus, 
-		accelerator="ddp",
+		accelerator="auto",
+		strategy="ddp",
 		precision=16,
-		plugins=[DDPPlugin(find_unused_parameters=find_unused_parameters),],
 		max_epochs=args.epoch,
 		callbacks=[
 			LearningRateMonitor(logging_interval='step'),
 		],
-		resume_from_checkpoint=args.resume_from_checkpoint,
+		enable_progress_bar=False,
 		check_val_every_n_epoch=1,
-		log_every_n_steps=args.log_interval,
-		progress_bar_refresh_rate=args.log_interval,
-		flush_logs_every_n_steps=args.log_interval*5)
+		log_every_n_steps=args.log_interval,)
 		
 	# To be reproducable
 	torch.random.manual_seed(args.seed)
@@ -227,7 +216,10 @@ def single_run():
 	print_on_rank_zero(args)
 	timestamp = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime())
 	print_on_rank_zero(f'{timestamp} - INFO - Start running,')
-	trainer.fit(model, data_module)
+	if not args.resume_from_checkpoint:
+		trainer.fit(model, data_module)
+	else:
+		trainer.fit(model. data_module, ckpt_path=args.resume_from_checkpoint)
 	
 if __name__ == '__main__':
 	single_run()

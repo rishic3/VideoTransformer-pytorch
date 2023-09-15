@@ -149,6 +149,7 @@ if __name__ == '__main__':
 		image = io.imread('./test_1.jpg')[:224,:224,:]
 		images[1] = image
 		hog_features = np.stack(list(map(extract_hog, images)), axis=0)
+		print("hog features:")
 		print(hog_features.shape, np.min(hog_features), np.max(hog_features))
 		#io.imsave('./test_img_hog.jpg',hog_image)
 		#'''

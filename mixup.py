@@ -132,6 +132,7 @@ if __name__ == '__main__':
 	mixupfn = Mixup(num_classes=4)
 	x = torch.rand(2,2,1,10,10)
 	label = [0, 1]
+	print("mixup:")
 	print(x, label)
 	y = torch.from_numpy(np.array(label))
 	x, y = mixupfn(x, y)

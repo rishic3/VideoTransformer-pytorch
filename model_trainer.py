@@ -82,8 +82,7 @@ class VideoTransformer(pl.LightningModule):
 				self.configs.num_class, self.model.embed_dims, eval_metrics=self.configs.eval_metrics)
 			
 			self.max_top1_acc = 0
-			self.train_top1_acc = Accuracy()
-			self.train_top5_acc = Accuracy(top_k=5)
+			self.train_top1_acc = Accuracy(task='binary')
 			if self.configs.mixup:
 				self.mixup_fn = Mixup(num_classes=self.configs.num_class)
 				self.loss_fn = SoftTargetCrossEntropy()
@@ -97,12 +96,10 @@ class VideoTransformer(pl.LightningModule):
 		self.do_eval = do_eval
 		self.do_test = do_test
 		if self.do_eval:
-			self.val_top1_acc = Accuracy()
-			self.val_top5_acc = Accuracy(top_k=5)
+			self.val_top1_acc = Accuracy(task='binary')
 		if self.do_test:
 			self.n_crops = n_crops
-			self.test_top1_acc = Accuracy()
-			self.test_top5_acc = Accuracy(top_k=5)
+			self.test_top1_acc = Accuracy(task='binary')
 	
 	@torch.jit.ignore
 	def no_weight_decay_keywords(self):
@@ -169,12 +166,11 @@ class VideoTransformer(pl.LightningModule):
 		total_grad_norm = torch.norm(torch.stack(layer_norm), norm_type)
 		return total_grad_norm
 	
-	def log_step_state(self, data_time, top1_acc=0, top5_acc=0):
+	def log_step_state(self, data_time, top1_acc=0):
 		self.log("time",float(f'{time.perf_counter()-self.data_start:.3f}'),prog_bar=True)
 		self.log("data_time", data_time, prog_bar=True)
 		if self.configs.objective == 'supervised':
 			self.log("top1_acc",top1_acc,on_step=True,on_epoch=False,prog_bar=True)
-			self.log("top5_acc",top5_acc,on_step=True,on_epoch=False,prog_bar=True)
 
 		return None
 
@@ -208,11 +204,9 @@ class VideoTransformer(pl.LightningModule):
 			loss = self.loss_fn(preds, labels)
 			if self.configs.mixup:
 				top1_acc = self.train_top1_acc(preds.softmax(dim=-1), labels.argmax(-1))
-				top5_acc = self.train_top5_acc(preds.softmax(dim=-1), labels.argmax(-1))
 			else:
 				top1_acc = self.train_top1_acc(preds.softmax(dim=-1), labels)
-				top5_acc = self.train_top5_acc(preds.softmax(dim=-1), labels)
-			self.log_step_state(data_time, top1_acc, top5_acc)
+			self.log_step_state(data_time, top1_acc)
 			return {'loss': loss, 'data_time': data_time}
 	
 	def on_after_backward(self):
@@ -230,16 +224,13 @@ class VideoTransformer(pl.LightningModule):
 		self.data_start = time.perf_counter()
 		self.iteration += 1
 
-	def training_epoch_end(self, outputs):
+	def on_train_epoch_end(self, outputs):
 		timestamp = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime())
 		if self.configs.objective == 'supervised':
 			mean_top1_acc = self.train_top1_acc.compute()
-			mean_top5_acc = self.train_top5_acc.compute()
 			self.print(f'{timestamp} - Evaluating mean ',
-					   f'top1_acc:{mean_top1_acc:.3f},',
-					   f'top5_acc:{mean_top5_acc:.3f} of current training epoch')
+					   f'top1_acc:{mean_top1_acc:.3f},')
 			self.train_top1_acc.reset()
-			self.train_top5_acc.reset()
 
 		# save last checkpoint
 		save_path = osp.join(self.ckpt_dir, 'last_checkpoint.pth')
@@ -265,19 +256,15 @@ class VideoTransformer(pl.LightningModule):
 			preds = self.cls_head(preds)
 			
 			self.val_top1_acc(preds.softmax(dim=-1), labels)
-			self.val_top5_acc(preds.softmax(dim=-1), labels)
 			self.data_start = time.perf_counter()
 	
-	def validation_epoch_end(self, outputs):
+	def on_validation_epoch_end(self, outputs):
 		if self.do_eval:
 			mean_top1_acc = self.val_top1_acc.compute()
-			mean_top5_acc = self.val_top5_acc.compute()
 			timestamp = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime())
 			self.print(f'{timestamp} - Evaluating mean ',
-					   f'top1_acc:{mean_top1_acc:.3f}, ',
-					   f'top5_acc:{mean_top5_acc:.3f} of current validation epoch')
+					   f'top1_acc:{mean_top1_acc:.3f}, ')
 			self.val_top1_acc.reset()
-			self.val_top5_acc.reset()
 
 			# save best checkpoint
 			if mean_top1_acc > self.max_top1_acc:
@@ -295,16 +282,12 @@ class VideoTransformer(pl.LightningModule):
 			preds = preds.view(-1, self.n_crops, self.configs.num_class).mean(1)
 
 			self.test_top1_acc(preds.softmax(dim=-1), labels)
-			self.test_top5_acc(preds.softmax(dim=-1), labels)
 			self.data_start = time.perf_counter()
 	
-	def test_epoch_end(self, outputs):
+	def on_test_epoch_end(self, outputs):
 		if self.do_test:
 			mean_top1_acc = self.test_top1_acc.compute()
-			mean_top5_acc = self.test_top5_acc.compute()
 			timestamp = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime())
 			self.print(f'{timestamp} - Evaluating mean ',
-					   f'top1_acc:{mean_top1_acc:.3f}, ',
-					   f'top5_acc:{mean_top5_acc:.3f} of current test epoch')
+					   f'top1_acc:{mean_top1_acc:.3f}, ')
 			self.test_top1_acc.reset()
-			self.test_top5_acc.reset()

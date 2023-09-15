@@ -358,7 +358,7 @@ class ColorJitter(object):
 		self.hue = hue
 
 	def __call__(self, imgs):
-		print(imgs.shape)
+		print("imgs shape:", imgs.shape)
 		if imgs.ndim == 3:
 			imgs = rearrange(imgs, '(t c) h w -> t c h w', c=3)
 			imgs = self._color_jit(imgs)
