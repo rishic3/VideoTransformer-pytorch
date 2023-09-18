@@ -120,6 +120,7 @@ class Sinus(torch.utils.data.Dataset):
 		if self.objective == 'mim':
 			self.mask_generator = CubeMaskGenerator(input_size=(self.target_video_len//2,14,14),min_num_patches=16)
 
+	'''
 	def __getitem__(self, index):
 		while True:
 			try:
@@ -127,14 +128,57 @@ class Sinus(torch.utils.data.Dataset):
 				start_frame_ind = self.data[index]['start']
 				end_frame_ind = self.data[index]['end']
 				v_reader = self.v_decoder(path)
-            
-				assert end_frame_ind-start_frame_ind >= self.target_video_len
-				frame_indice = np.linspace(start_frame_ind, end_frame_ind-1, self.target_video_len, dtype=int)
+				video_length = end_frame_ind - start_frame_ind
+
+				if video_length == 0:
+					print(f"Warning: Video at index {index} has a length of 0. Skipping...")
+					index = random.randint(0, len(self.data) - 1)
+					continue
+							
+				# If the video is shorter than target length, loop it
+				if video_length < self.target_video_len:
+					loops_required = self.target_video_len // video_length + 1
+					frame_indice = list(np.linspace(start_frame_ind, end_frame_ind-1, video_length, dtype=int)) * loops_required
+					frame_indice = frame_indice[:self.target_video_len]  # Trim to the exact target length
+				else:
+					frame_indice = np.linspace(start_frame_ind, end_frame_ind-1, self.target_video_len, dtype=int)
+					
 				video = v_reader.get_batch(frame_indice).asnumpy()
 				del v_reader
 				break
 			except Exception as e:
-				print(e)
+				print(f"Exception at index {index}, path: {path}, error: {e}")
+				index = random.randint(0, len(self.data) - 1)
+		'''
+	
+	def __getitem__(self, index):
+		while True:
+			try:
+				path = self.data[index]['video']
+				
+				# Create a video reader
+				v_reader = self.v_decoder(path)
+				
+				# Use the full length of the video
+				video_length = len(v_reader)
+
+				if video_length == 0:
+					print(f"Warning: Video at index {index} has a length of 0. Skipping...")
+					index = random.randint(0, len(self.data) - 1)
+					continue
+				
+				# If the video is shorter than target length, loop the last frame
+				if video_length < self.target_video_len:
+					print(f"Warning: Video at index {index} has a length of {video_length}. Looping the last frame...")
+					frame_indice = list(range(video_length)) + [video_length - 1] * (self.target_video_len - video_length)
+				else:
+					frame_indice = np.linspace(0, video_length-1, self.target_video_len, dtype=int)
+				
+				video = v_reader.get_batch(frame_indice).asnumpy()
+				del v_reader
+				break
+			except Exception as e:
+				print(f"Exception at index {index}, path: {path}, error: {e}")
 				index = random.randint(0, len(self.data) - 1)
 		
 		# Video align transform: T C H W

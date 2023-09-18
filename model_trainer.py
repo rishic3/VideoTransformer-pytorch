@@ -82,7 +82,7 @@ class VideoTransformer(pl.LightningModule):
 				self.configs.num_class, self.model.embed_dims, eval_metrics=self.configs.eval_metrics)
 			
 			self.max_top1_acc = 0
-			self.train_top1_acc = Accuracy(task='binary')
+			self.train_top1_acc = Accuracy(task='multiclass', num_classes=self.configs.num_class)
 			if self.configs.mixup:
 				self.mixup_fn = Mixup(num_classes=self.configs.num_class)
 				self.loss_fn = SoftTargetCrossEntropy()
@@ -96,10 +96,10 @@ class VideoTransformer(pl.LightningModule):
 		self.do_eval = do_eval
 		self.do_test = do_test
 		if self.do_eval:
-			self.val_top1_acc = Accuracy(task='binary')
+			self.val_top1_acc = Accuracy(task='multiclass', num_classes=self.configs.num_class)
 		if self.do_test:
 			self.n_crops = n_crops
-			self.test_top1_acc = Accuracy(task='binary')
+			self.test_top1_acc = Accuracy(task='multiclass', num_classes=self.configs.num_class)
 	
 	@torch.jit.ignore
 	def no_weight_decay_keywords(self):
@@ -149,12 +149,17 @@ class VideoTransformer(pl.LightningModule):
 			if i == 1:  # only the first group is regularized
 				param_group["weight_decay"] = self._get_momentum(base_value=self.configs.weight_decay, final_value=self.configs.weight_decay_end)
 
-	def clip_gradients(self, clip_grad, norm_type=2):
+	'''
+	def clip_gradients(self, clip_grad=None, norm_type=2, gradient_clip_val=None, gradient_clip_algorithm='norm'):
+
+		clip_grad = clip_grad or gradient_clip_val or self.configs.clip_grad
+
 		layer_norm = []
 		if self.configs.objective == 'supervised' and self.configs.eval_metrics == 'linear_prob':
 			model_wo_ddp = self.cls_head.module if hasattr(self.cls_head, 'module') else self.cls_head
 		else:
 			model_wo_ddp = self.module if hasattr(self, 'module') else self
+
 		for name, p in model_wo_ddp.named_parameters():
 			if p.grad is not None:
 				param_norm = torch.norm(p.grad.detach(), norm_type)
@@ -165,7 +170,8 @@ class VideoTransformer(pl.LightningModule):
 						p.grad.data.mul_(clip_coef)
 		total_grad_norm = torch.norm(torch.stack(layer_norm), norm_type)
 		return total_grad_norm
-	
+	'''
+
 	def log_step_state(self, data_time, top1_acc=0):
 		self.log("time",float(f'{time.perf_counter()-self.data_start:.3f}'),prog_bar=True)
 		self.log("data_time", data_time, prog_bar=True)
@@ -202,33 +208,31 @@ class VideoTransformer(pl.LightningModule):
 					preds = self.model(inputs)
 			preds = self.cls_head(preds)
 			loss = self.loss_fn(preds, labels)
-			if self.configs.mixup:
-				top1_acc = self.train_top1_acc(preds.softmax(dim=-1), labels.argmax(-1))
-			else:
-				top1_acc = self.train_top1_acc(preds.softmax(dim=-1), labels)
+			predicted_classes = preds.argmax(dim=1)
+			top1_acc = self.train_top1_acc(predicted_classes, labels)
 			self.log_step_state(data_time, top1_acc)
 			return {'loss': loss, 'data_time': data_time}
 	
 	def on_after_backward(self):
-		param_norms = self.clip_gradients(self.configs.clip_grad)
 		self._weight_decay_update()
 		# log learning daynamic
 		lr = self.optimizers().optimizer.param_groups[0]['lr']
 		self.log("lr",lr,on_step=True,on_epoch=False,prog_bar=True)
-		self.log("grad_norm",param_norms,on_step=True,on_epoch=False,prog_bar=True)
 	
+	'''
 	def optimizer_step(self, epoch, batch_idx, optimizer, optimizer_idx,
 		optimizer_closure, on_tpu, using_native_amp, using_lbfgs):
 
 		optimizer.step(closure=optimizer_closure)
 		self.data_start = time.perf_counter()
 		self.iteration += 1
+	'''
 
-	def on_train_epoch_end(self, outputs):
+	def on_train_epoch_end(self):
 		timestamp = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime())
 		if self.configs.objective == 'supervised':
 			mean_top1_acc = self.train_top1_acc.compute()
-			self.print(f'{timestamp} - Evaluating mean ',
+			self.print(f'{timestamp} - Evaluating mean train',
 					   f'top1_acc:{mean_top1_acc:.3f},')
 			self.train_top1_acc.reset()
 
@@ -254,15 +258,15 @@ class VideoTransformer(pl.LightningModule):
 				else:
 					preds = self.model(inputs)
 			preds = self.cls_head(preds)
-			
-			self.val_top1_acc(preds.softmax(dim=-1), labels)
+			predicted_classes = preds.argmax(dim=1)
+			self.val_top1_acc(predicted_classes, labels)
 			self.data_start = time.perf_counter()
 	
-	def on_validation_epoch_end(self, outputs):
+	def on_validation_epoch_end(self):
 		if self.do_eval:
 			mean_top1_acc = self.val_top1_acc.compute()
 			timestamp = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime())
-			self.print(f'{timestamp} - Evaluating mean ',
+			self.print(f'{timestamp} - Evaluating mean valid',
 					   f'top1_acc:{mean_top1_acc:.3f}, ')
 			self.val_top1_acc.reset()
 
@@ -280,11 +284,11 @@ class VideoTransformer(pl.LightningModule):
 			inputs, labels = self.parse_batch(batch)
 			preds = self.cls_head(self.model(inputs))
 			preds = preds.view(-1, self.n_crops, self.configs.num_class).mean(1)
-
-			self.test_top1_acc(preds.softmax(dim=-1), labels)
+			predicted_classes = preds.argmax(dim=1)
+			self.test_top1_acc(predicted_classes, labels)
 			self.data_start = time.perf_counter()
 	
-	def on_test_epoch_end(self, outputs):
+	def on_test_epoch_end(self):
 		if self.do_test:
 			mean_top1_acc = self.test_top1_acc.compute()
 			timestamp = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime())

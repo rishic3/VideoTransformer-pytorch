@@ -197,6 +197,7 @@ def single_run():
 		callbacks=[
 			LearningRateMonitor(logging_interval='step'),
 		],
+		gradient_clip_val=args.clip_grad,
 		enable_progress_bar=False,
 		check_val_every_n_epoch=1,
 		log_every_n_steps=args.log_interval,)
