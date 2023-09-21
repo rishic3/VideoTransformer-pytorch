@@ -81,7 +81,7 @@ class SinusDataModule(pl.LightningDataModule):
 		train_temporal_sample = T.TemporalRandomCrop(
 			self.configs.num_frames * self.configs.frame_interval)
 
-		self.train_dataset = self.get_dataset('train.csv', train_transform, train_temporal_sample)
+		self.train_dataset = self.get_dataset('stratified_train.csv', train_transform, train_temporal_sample)
 	
 		val_transform = T.create_video_transform(
 			input_size=self.configs.img_size,
@@ -91,7 +91,7 @@ class SinusDataModule(pl.LightningDataModule):
 			std=std)
 		val_temporal_sample = T.TemporalRandomCrop(
 			self.configs.num_frames * self.configs.frame_interval)
-		self.val_dataset = self.get_dataset('valid.csv', val_transform, val_temporal_sample)
+		self.val_dataset = self.get_dataset('stratified_valid.csv', val_transform, val_temporal_sample)
 
 		test_transform = T.Compose([
 			T.Resize(scale_range=(-1, 256)),
@@ -101,7 +101,7 @@ class SinusDataModule(pl.LightningDataModule):
 			])
 		test_temporal_sample = T.TemporalRandomCrop(
 			self.configs.num_frames * self.configs.frame_interval)
-		self.test_dataset = self.get_dataset('test.csv', test_transform, test_temporal_sample)
+		self.test_dataset = self.get_dataset('stratified_test.csv', test_transform, test_temporal_sample)
 
 	def train_dataloader(self):
 		return DataLoader(
