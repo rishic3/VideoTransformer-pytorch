@@ -209,6 +209,20 @@ class VideoTransformer(pl.LightningModule):
 			preds = self.cls_head(preds)
 			loss = self.loss_fn(preds, labels)
 			predicted_classes = preds.argmax(dim=1)
+
+			# sensitivity / specificity
+			TP = ((predicted_classes == 1) & (labels == 1)).sum().item()
+			TN = ((predicted_classes == 0) & (labels == 0)).sum().item()
+			FP = ((predicted_classes == 1) & (labels == 0)).sum().item()
+			FN = ((predicted_classes == 0) & (labels == 1)).sum().item()
+			sensitivity = TP / (TP + FN) if TP + FN > 0 else 0
+			specificity = TN / (TN + FP) if TN + FP > 0 else 0
+
+			self.log('train_sensitivity', sensitivity, on_step=True, on_epoch=True, prog_bar=True, logger=True)
+			self.log('train_specificity', specificity, on_step=True, on_epoch=True, prog_bar=True, logger=True)
+			print(f'         Train sensitivity: {sensitivity:.3f}, specificity: {specificity:.3f}')
+			print(f'         Train predictions: {predicted_classes.tolist()}')
+
 			top1_acc = self.train_top1_acc(predicted_classes, labels)
 			self.log_step_state(data_time, top1_acc)
 			return {'loss': loss, 'data_time': data_time}
@@ -259,6 +273,20 @@ class VideoTransformer(pl.LightningModule):
 					preds = self.model(inputs)
 			preds = self.cls_head(preds)
 			predicted_classes = preds.argmax(dim=1)
+
+			# sensitivity / specificity
+			TP = ((predicted_classes == 1) & (labels == 1)).sum().item()
+			TN = ((predicted_classes == 0) & (labels == 0)).sum().item()
+			FP = ((predicted_classes == 1) & (labels == 0)).sum().item()
+			FN = ((predicted_classes == 0) & (labels == 1)).sum().item()
+			sensitivity = TP / (TP + FN) if TP + FN > 0 else 0
+			specificity = TN / (TN + FP) if TN + FP > 0 else 0
+			
+			self.log('val_sensitivity', sensitivity, on_step=True, on_epoch=True, prog_bar=True, logger=True)
+			self.log('val_specificity', specificity, on_step=True, on_epoch=True, prog_bar=True, logger=True)
+			print(f'         Val sensitivity: {sensitivity:.3f}, specificity: {specificity:.3f}')
+			print(f'         Val predictions: {predicted_classes.tolist()}')
+
 			self.val_top1_acc(predicted_classes, labels)
 			self.data_start = time.perf_counter()
 	
