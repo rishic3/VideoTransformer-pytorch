@@ -8,6 +8,7 @@ import torch.nn.functional as F
 import torch.nn as nn
 import torch.optim as optim
 import torchvision
+import torch.distributed as dist
 from torchmetrics import Accuracy
 from timm.loss import SoftTargetCrossEntropy
 
@@ -84,7 +85,9 @@ class VideoTransformer(pl.LightningModule):
 			self.max_top1_acc = 0
 			self.train_top1_acc = Accuracy(task='multiclass', num_classes=self.configs.num_class)
 			# init running counters of tp, tn, fp, fn
-			self.reset_metrics()
+			self.reset_train_metrics()
+			self.reset_val_metrics()
+			self.reset_test_metrics()
 
 			if self.configs.mixup:
 				self.mixup_fn = Mixup(num_classes=self.configs.num_class)
@@ -111,12 +114,26 @@ class VideoTransformer(pl.LightningModule):
 	def no_weight_decay_keywords(self):
 		return {'pos_embed', 'cls_token', 'mask_token'}
 
-	def reset_metrics(self):
-		# reset sensitivity and specificity for each epoch
-		self.tp = 0.0
-		self.tn = 0.0
-		self.fp = 0.0
-		self.fn = 0.0
+	def reset_train_metrics(self):
+		# reset train sensitivity and specificity for each epoch
+		self.train_tp = 0.0
+		self.train_tn = 0.0
+		self.train_fp = 0.0
+		self.train_fn = 0.0
+
+	def reset_val_metrics(self):
+		# reset val sensitivity and specificity for each epoch
+		self.val_tp = 0.0
+		self.val_tn = 0.0
+		self.val_fp = 0.0
+		self.val_fn = 0.0
+	
+	def reset_test_metrics(self):
+		# reset val sensitivity and specificity for each epoch
+		self.test_tp = 0.0
+		self.test_tn = 0.0
+		self.test_fp = 0.0
+		self.test_fn = 0.0
 
 	def configure_optimizers(self):
 		# build optimzer
@@ -201,10 +218,10 @@ class VideoTransformer(pl.LightningModule):
 			predicted_classes = preds.argmax(dim=1)
 
 			# sensitivity / specificity
-			self.tp += ((predicted_classes == 1) & (labels == 1)).sum().item()
-			self.tn += ((predicted_classes == 0) & (labels == 0)).sum().item()
-			self.fp += ((predicted_classes == 1) & (labels == 0)).sum().item()
-			self.fn += ((predicted_classes == 0) & (labels == 1)).sum().item()
+			self.train_tp += ((predicted_classes == 1) & (labels == 1)).sum().item()
+			self.train_tn += ((predicted_classes == 0) & (labels == 0)).sum().item()
+			self.train_fp += ((predicted_classes == 1) & (labels == 0)).sum().item()
+			self.train_fn += ((predicted_classes == 0) & (labels == 1)).sum().item()
 
 			top1_acc = self.train_top1_acc(predicted_classes, labels)
 			self.log_step_state(data_time, top1_acc)
@@ -225,13 +242,11 @@ class VideoTransformer(pl.LightningModule):
 			self.train_top1_acc.reset()
 
 			# sensitivity / specificity
-			sensitivity = self.tp / (self.tp + self.fn) if self.tp + self.fn > 0 else 0
-			specificity = self.tn / (self.tn + self.fp) if self.tn + self.fp > 0 else 0
-			self.log('train_sensitivity', sensitivity, on_step=True, on_epoch=True, prog_bar=True, logger=True)
-			self.log('train_specificity', specificity, on_step=True, on_epoch=True, prog_bar=True, logger=True)
+			sensitivity = self.train_tp / (self.train_tp + self.train_fn) if self.train_tp + self.train_fn > 0 else 0
+			specificity = self.train_tn / (self.train_tn + self.train_fp) if self.train_tn + self.train_fp > 0 else 0
 			print(f'         Mean train sensitivity: {sensitivity:.3f}')
 			print(f'         Mean train specificity: {specificity:.3f}')
-			self.reset_metrics()
+			self.reset_train_metrics()
 
 		# save last checkpoint
 		save_path = osp.join(self.ckpt_dir, 'last_checkpoint.pth')
@@ -258,10 +273,10 @@ class VideoTransformer(pl.LightningModule):
 			predicted_classes = preds.argmax(dim=1)
 
 			# sensitivity / specificity
-			self.tp = ((predicted_classes == 1) & (labels == 1)).sum().item()
-			self.tn = ((predicted_classes == 0) & (labels == 0)).sum().item()
-			self.fp = ((predicted_classes == 1) & (labels == 0)).sum().item()
-			self.fn = ((predicted_classes == 0) & (labels == 1)).sum().item()
+			self.val_tp = ((predicted_classes == 1) & (labels == 1)).sum().item()
+			self.val_tn = ((predicted_classes == 0) & (labels == 0)).sum().item()
+			self.val_fp = ((predicted_classes == 1) & (labels == 0)).sum().item()
+			self.val_fn = ((predicted_classes == 0) & (labels == 1)).sum().item()
 
 			self.val_top1_acc(predicted_classes, labels)
 			self.data_start = time.perf_counter()
@@ -273,15 +288,13 @@ class VideoTransformer(pl.LightningModule):
 			self.print(f'{timestamp} - Evaluating mean valid',
 					   f'top1_acc:{mean_top1_acc:.3f}, ')
 			self.val_top1_acc.reset()
-
+			print(f'    On epoch: {self.current_epoch}')
 			# sensitivity / specificity
-			sensitivity = self.tp / (self.tp + self.fn) if self.tp + self.fn > 0 else 0
-			specificity = self.tn / (self.tn + self.fp) if self.tn + self.fp > 0 else 0
-			self.log('val_sensitivity', sensitivity, on_step=True, on_epoch=True, prog_bar=True, logger=True)
-			self.log('val_specificity', specificity, on_step=True, on_epoch=True, prog_bar=True, logger=True)
+			sensitivity = self.val_tp / (self.val_tp + self.val_fn) if self.val_tp + self.val_fn > 0 else 0
+			specificity = self.val_tn / (self.val_tn + self.val_fp) if self.val_tn + self.val_fp > 0 else 0
 			print(f'         Mean val sensitivity: {sensitivity:.3f}')
 			print(f'         Mean val specificity: {specificity:.3f}')
-			self.reset_metrics()
+			self.reset_val_metrics()
 
 			# save best checkpoint
 			if mean_top1_acc > self.max_top1_acc:
@@ -300,10 +313,10 @@ class VideoTransformer(pl.LightningModule):
 			predicted_classes = preds.argmax(dim=1)
 
 			# sensitivity / specificity
-			self.tp += ((predicted_classes == 1) & (labels == 1)).sum().item()
-			self.tn += ((predicted_classes == 0) & (labels == 0)).sum().item()
-			self.fp += ((predicted_classes == 1) & (labels == 0)).sum().item()
-			self.fn += ((predicted_classes == 0) & (labels == 1)).sum().item()
+			self.test_tp += ((predicted_classes == 1) & (labels == 1)).sum().item()
+			self.test_tn += ((predicted_classes == 0) & (labels == 0)).sum().item()
+			self.test_fp += ((predicted_classes == 1) & (labels == 0)).sum().item()
+			self.test_fn += ((predicted_classes == 0) & (labels == 1)).sum().item()
 
 			self.test_top1_acc(predicted_classes, labels)
 			self.data_start = time.perf_counter()
@@ -317,10 +330,8 @@ class VideoTransformer(pl.LightningModule):
 			self.test_top1_acc.reset()
 
 			# sensitivity / specificity
-			sensitivity = self.tp / (self.tp + self.fn) if self.tp + self.fn > 0 else 0
-			specificity = self.tn / (self.tn + self.fp) if self.tn + self.fp > 0 else 0
-			self.log('test_sensitivity', sensitivity, on_step=True, on_epoch=True, prog_bar=True, logger=True)
-			self.log('test_specificity', specificity, on_step=True, on_epoch=True, prog_bar=True, logger=True)
+			sensitivity = self.test_tp / (self.test_tp + self.test_fn) if self.test_tp + self.test_fn > 0 else 0
+			specificity = self.test_tn / (self.test_tn + self.test_fp) if self.test_tn + self.test_fp > 0 else 0
 			print(f'         Mean test sensitivity: {sensitivity:.3f}')
 			print(f'         Mean test specificity: {specificity:.3f}')
-			self.reset_metrics()
+			self.reset_test_metrics()

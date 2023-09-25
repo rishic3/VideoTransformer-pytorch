@@ -189,9 +189,10 @@ def single_run():
 	else:
 		find_unused_parameters = False
 
+	os.environ["CUDA_VISIBLE_DEVICES"] = "1"	
 	trainer = pl.Trainer(
-		accelerator="auto",
-		strategy="ddp",
+		#strategy="ddp",
+		devices=[0],
 		precision=16,
 		max_epochs=args.epoch,
 		callbacks=[
