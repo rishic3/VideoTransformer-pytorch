@@ -83,11 +83,17 @@ class VideoTransformer(pl.LightningModule):
 			
 			self.max_top1_acc = 0
 			self.train_top1_acc = Accuracy(task='multiclass', num_classes=self.configs.num_class)
+			# init running counters of tp, tn, fp, fn
+			self.reset_metrics()
+
 			if self.configs.mixup:
 				self.mixup_fn = Mixup(num_classes=self.configs.num_class)
 				self.loss_fn = SoftTargetCrossEntropy()
 			else:
-				self.loss_fn = nn.CrossEntropyLoss()
+				# weight positive classes more heavily
+				device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+				class_weights = torch.tensor([1.0 / 0.7, 1.0 / 0.3], dtype=torch.float32).to(device) 
+				self.loss_fn = nn.CrossEntropyLoss(weight=class_weights)
 
 		# common
 		self.iteration = 0
@@ -100,10 +106,17 @@ class VideoTransformer(pl.LightningModule):
 		if self.do_test:
 			self.n_crops = n_crops
 			self.test_top1_acc = Accuracy(task='multiclass', num_classes=self.configs.num_class)
-	
+
 	@torch.jit.ignore
 	def no_weight_decay_keywords(self):
 		return {'pos_embed', 'cls_token', 'mask_token'}
+
+	def reset_metrics(self):
+		# reset sensitivity and specificity for each epoch
+		self.tp = 0.0
+		self.tn = 0.0
+		self.fp = 0.0
+		self.fn = 0.0
 
 	def configure_optimizers(self):
 		# build optimzer
@@ -149,29 +162,6 @@ class VideoTransformer(pl.LightningModule):
 			if i == 1:  # only the first group is regularized
 				param_group["weight_decay"] = self._get_momentum(base_value=self.configs.weight_decay, final_value=self.configs.weight_decay_end)
 
-	'''
-	def clip_gradients(self, clip_grad=None, norm_type=2, gradient_clip_val=None, gradient_clip_algorithm='norm'):
-
-		clip_grad = clip_grad or gradient_clip_val or self.configs.clip_grad
-
-		layer_norm = []
-		if self.configs.objective == 'supervised' and self.configs.eval_metrics == 'linear_prob':
-			model_wo_ddp = self.cls_head.module if hasattr(self.cls_head, 'module') else self.cls_head
-		else:
-			model_wo_ddp = self.module if hasattr(self, 'module') else self
-
-		for name, p in model_wo_ddp.named_parameters():
-			if p.grad is not None:
-				param_norm = torch.norm(p.grad.detach(), norm_type)
-				layer_norm.append(param_norm)
-				if clip_grad:
-					clip_coef = clip_grad / (param_norm + 1e-6)
-					if clip_coef < 1:
-						p.grad.data.mul_(clip_coef)
-		total_grad_norm = torch.norm(torch.stack(layer_norm), norm_type)
-		return total_grad_norm
-	'''
-
 	def log_step_state(self, data_time, top1_acc=0):
 		self.log("time",float(f'{time.perf_counter()-self.data_start:.3f}'),prog_bar=True)
 		self.log("data_time", data_time, prog_bar=True)
@@ -211,17 +201,10 @@ class VideoTransformer(pl.LightningModule):
 			predicted_classes = preds.argmax(dim=1)
 
 			# sensitivity / specificity
-			TP = ((predicted_classes == 1) & (labels == 1)).sum().item()
-			TN = ((predicted_classes == 0) & (labels == 0)).sum().item()
-			FP = ((predicted_classes == 1) & (labels == 0)).sum().item()
-			FN = ((predicted_classes == 0) & (labels == 1)).sum().item()
-			sensitivity = TP / (TP + FN) if TP + FN > 0 else 0
-			specificity = TN / (TN + FP) if TN + FP > 0 else 0
-
-			self.log('train_sensitivity', sensitivity, on_step=True, on_epoch=True, prog_bar=True, logger=True)
-			self.log('train_specificity', specificity, on_step=True, on_epoch=True, prog_bar=True, logger=True)
-			print(f'         Train sensitivity: {sensitivity:.3f}, specificity: {specificity:.3f}')
-			print(f'         Train predictions: {predicted_classes.tolist()}')
+			self.tp += ((predicted_classes == 1) & (labels == 1)).sum().item()
+			self.tn += ((predicted_classes == 0) & (labels == 0)).sum().item()
+			self.fp += ((predicted_classes == 1) & (labels == 0)).sum().item()
+			self.fn += ((predicted_classes == 0) & (labels == 1)).sum().item()
 
 			top1_acc = self.train_top1_acc(predicted_classes, labels)
 			self.log_step_state(data_time, top1_acc)
@@ -232,15 +215,6 @@ class VideoTransformer(pl.LightningModule):
 		# log learning daynamic
 		lr = self.optimizers().optimizer.param_groups[0]['lr']
 		self.log("lr",lr,on_step=True,on_epoch=False,prog_bar=True)
-	
-	'''
-	def optimizer_step(self, epoch, batch_idx, optimizer, optimizer_idx,
-		optimizer_closure, on_tpu, using_native_amp, using_lbfgs):
-
-		optimizer.step(closure=optimizer_closure)
-		self.data_start = time.perf_counter()
-		self.iteration += 1
-	'''
 
 	def on_train_epoch_end(self):
 		timestamp = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime())
@@ -249,6 +223,15 @@ class VideoTransformer(pl.LightningModule):
 			self.print(f'{timestamp} - Evaluating mean train',
 					   f'top1_acc:{mean_top1_acc:.3f},')
 			self.train_top1_acc.reset()
+
+			# sensitivity / specificity
+			sensitivity = self.tp / (self.tp + self.fn) if self.tp + self.fn > 0 else 0
+			specificity = self.tn / (self.tn + self.fp) if self.tn + self.fp > 0 else 0
+			self.log('train_sensitivity', sensitivity, on_step=True, on_epoch=True, prog_bar=True, logger=True)
+			self.log('train_specificity', specificity, on_step=True, on_epoch=True, prog_bar=True, logger=True)
+			print(f'         Mean train sensitivity: {sensitivity:.3f}')
+			print(f'         Mean train specificity: {specificity:.3f}')
+			self.reset_metrics()
 
 		# save last checkpoint
 		save_path = osp.join(self.ckpt_dir, 'last_checkpoint.pth')
@@ -275,17 +258,10 @@ class VideoTransformer(pl.LightningModule):
 			predicted_classes = preds.argmax(dim=1)
 
 			# sensitivity / specificity
-			TP = ((predicted_classes == 1) & (labels == 1)).sum().item()
-			TN = ((predicted_classes == 0) & (labels == 0)).sum().item()
-			FP = ((predicted_classes == 1) & (labels == 0)).sum().item()
-			FN = ((predicted_classes == 0) & (labels == 1)).sum().item()
-			sensitivity = TP / (TP + FN) if TP + FN > 0 else 0
-			specificity = TN / (TN + FP) if TN + FP > 0 else 0
-			
-			self.log('val_sensitivity', sensitivity, on_step=True, on_epoch=True, prog_bar=True, logger=True)
-			self.log('val_specificity', specificity, on_step=True, on_epoch=True, prog_bar=True, logger=True)
-			print(f'         Val sensitivity: {sensitivity:.3f}, specificity: {specificity:.3f}')
-			print(f'         Val predictions: {predicted_classes.tolist()}')
+			self.tp = ((predicted_classes == 1) & (labels == 1)).sum().item()
+			self.tn = ((predicted_classes == 0) & (labels == 0)).sum().item()
+			self.fp = ((predicted_classes == 1) & (labels == 0)).sum().item()
+			self.fn = ((predicted_classes == 0) & (labels == 1)).sum().item()
 
 			self.val_top1_acc(predicted_classes, labels)
 			self.data_start = time.perf_counter()
@@ -297,6 +273,15 @@ class VideoTransformer(pl.LightningModule):
 			self.print(f'{timestamp} - Evaluating mean valid',
 					   f'top1_acc:{mean_top1_acc:.3f}, ')
 			self.val_top1_acc.reset()
+
+			# sensitivity / specificity
+			sensitivity = self.tp / (self.tp + self.fn) if self.tp + self.fn > 0 else 0
+			specificity = self.tn / (self.tn + self.fp) if self.tn + self.fp > 0 else 0
+			self.log('val_sensitivity', sensitivity, on_step=True, on_epoch=True, prog_bar=True, logger=True)
+			self.log('val_specificity', specificity, on_step=True, on_epoch=True, prog_bar=True, logger=True)
+			print(f'         Mean val sensitivity: {sensitivity:.3f}')
+			print(f'         Mean val specificity: {specificity:.3f}')
+			self.reset_metrics()
 
 			# save best checkpoint
 			if mean_top1_acc > self.max_top1_acc:
@@ -313,6 +298,13 @@ class VideoTransformer(pl.LightningModule):
 			preds = self.cls_head(self.model(inputs))
 			preds = preds.view(-1, self.n_crops, self.configs.num_class).mean(1)
 			predicted_classes = preds.argmax(dim=1)
+
+			# sensitivity / specificity
+			self.tp += ((predicted_classes == 1) & (labels == 1)).sum().item()
+			self.tn += ((predicted_classes == 0) & (labels == 0)).sum().item()
+			self.fp += ((predicted_classes == 1) & (labels == 0)).sum().item()
+			self.fn += ((predicted_classes == 0) & (labels == 1)).sum().item()
+
 			self.test_top1_acc(predicted_classes, labels)
 			self.data_start = time.perf_counter()
 	
@@ -323,3 +315,12 @@ class VideoTransformer(pl.LightningModule):
 			self.print(f'{timestamp} - Evaluating mean ',
 					   f'top1_acc:{mean_top1_acc:.3f}, ')
 			self.test_top1_acc.reset()
+
+			# sensitivity / specificity
+			sensitivity = self.tp / (self.tp + self.fn) if self.tp + self.fn > 0 else 0
+			specificity = self.tn / (self.tn + self.fp) if self.tn + self.fp > 0 else 0
+			self.log('test_sensitivity', sensitivity, on_step=True, on_epoch=True, prog_bar=True, logger=True)
+			self.log('test_specificity', specificity, on_step=True, on_epoch=True, prog_bar=True, logger=True)
+			print(f'         Mean test sensitivity: {sensitivity:.3f}')
+			print(f'         Mean test specificity: {specificity:.3f}')
+			self.reset_metrics()
