@@ -5,6 +5,7 @@ import pytorch_lightning as pl
 import torch
 import torch.nn as nn
 from torch.utils.data.dataloader import DataLoader
+from torch.utils.data.sampler import WeightedRandomSampler
 
 from dataset import Sinus
 import data_transform as T
@@ -42,6 +43,7 @@ class SinusDataModule(pl.LightningDataModule):
 		super().__init__()
 		self.data_directory = data_directory
 		self.configs = configs
+		self.sample_balance = True
 	
 	def get_dataset(self, csv_filename, transform, temporal_sample):
 		csv_path = os.path.join(self.data_directory, csv_filename)
@@ -50,6 +52,7 @@ class SinusDataModule(pl.LightningDataModule):
 			csv_path,
 			transform=transform,
 			temporal_sample=temporal_sample)
+
 		return dataset
 
 	def setup(self, stage):
@@ -82,6 +85,14 @@ class SinusDataModule(pl.LightningDataModule):
 			self.configs.num_frames * self.configs.frame_interval)
 
 		self.train_dataset = self.get_dataset('stratified_train.csv', train_transform, train_temporal_sample)
+		
+		if self.sample_balance:
+			# sampler to oversample positive classes, yielding approximately balanced batches
+			labels = [sample['label'] for sample in self.train_dataset.data]
+			class_sample_count = np.bincount(labels)
+			weight = 1. / class_sample_count
+			samples_weight = torch.from_numpy(np.array([weight[t] for t in labels])).double()
+			self.train_sampler = WeightedRandomSampler(samples_weight, len(samples_weight), replacement=True)
 	
 		val_transform = T.create_video_transform(
 			input_size=self.configs.img_size,
@@ -104,15 +115,26 @@ class SinusDataModule(pl.LightningDataModule):
 		self.test_dataset = self.get_dataset('stratified_test.csv', test_transform, test_temporal_sample)
 
 	def train_dataloader(self):
-		return DataLoader(
-			self.train_dataset,
-			batch_size=self.configs.batch_size,
-			num_workers=self.configs.num_workers,
-			collate_fn=Collator(self.configs.objective).collate,
-			shuffle=True,
-			drop_last=True, 
-			pin_memory=True
-		)
+		if self.sample_balance:
+			return DataLoader(
+				self.train_dataset,
+				batch_size=self.configs.batch_size,
+				num_workers=self.configs.num_workers,
+				collate_fn=Collator(self.configs.objective).collate,
+				drop_last=True, 
+				pin_memory=True,
+				sampler = self.train_sampler
+			)
+		else:
+			return DataLoader(
+				self.train_dataset,
+				batch_size=self.configs.batch_size,
+				num_workers=self.configs.num_workers,
+				collate_fn=Collator(self.configs.objective).collate,
+				shuffle=True,
+				drop_last=True, 
+				pin_memory=True,
+			)
 	
 	def val_dataloader(self):
 		if hasattr(self, 'val_dataset'):
