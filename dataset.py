@@ -127,18 +127,19 @@ class Sinus(torch.utils.data.Dataset):
 				v_reader = self.v_decoder(path)
 				video_length = len(v_reader)
 
-				if video_length == 0:
-					print(f"Warning: Video at index {index} has a length of 0. Skipping...")
+				if video_length == 0 or video_length < self.target_video_len:
+					print(f"Warning: Video at index {index} has a length of {video_length} (too short). Skipping...")
 					index = random.randint(0, len(self.data) - 1)
 					continue
 				
+				'''
 				# If the video is shorter than target length, loop the last frame
 				if video_length < self.target_video_len:
 					print(f"Warning: Video at index {index} has a length of {video_length}. Looping the last frame...")
 					frame_indice = list(range(video_length)) + [video_length - 1] * (self.target_video_len - video_length)
-				else:
-					frame_indice = np.linspace(0, video_length-1, self.target_video_len, dtype=int)
-				
+				'''
+				frame_indice = np.linspace(0, video_length-1, self.target_video_len, dtype=int)
+
 				video = v_reader.get_batch(frame_indice).asnumpy()
 				del v_reader
 				break
