@@ -43,7 +43,16 @@ class SinusDataModule(pl.LightningDataModule):
 		super().__init__()
 		self.data_directory = data_directory
 		self.configs = configs
+
+		# SAMPLE BALANCING
+		#self.sample_balance = True
 		self.sample_balance = True
+		self.even_balance = False
+
+		# CSV PATHS
+		self.train_csv = 'fragment_train_seed3.csv'
+		self.valid_csv = 'fragment_valid_seed3.csv'
+		self.test_csv = 'fragment_test_seed3.csv'
 	
 	def get_dataset(self, csv_filename, transform, temporal_sample):
 		csv_path = os.path.join(self.data_directory, csv_filename)
@@ -84,14 +93,21 @@ class SinusDataModule(pl.LightningDataModule):
 		train_temporal_sample = T.TemporalRandomCrop(
 			self.configs.num_frames * self.configs.frame_interval)
 
-		self.train_dataset = self.get_dataset('stratified_train.csv', train_transform, train_temporal_sample)
+		self.train_dataset = self.get_dataset(self.train_csv, train_transform, train_temporal_sample)
 		
 		if self.sample_balance:
-			# sampler to oversample positive classes, yielding approximately balanced batches
+			# sampler to oversample positive classes
 			labels = [sample['label'] for sample in self.train_dataset.data]
-			class_sample_count = np.bincount(labels)
-			weight = 1. / class_sample_count
-			samples_weight = torch.from_numpy(np.array([weight[t] for t in labels])).double()
+			if self.even_balance:
+				# yield 50 / 50 batches
+				weight = 1 / len(labels)
+				samples_weight = torch.from_numpy(np.array([weight for _ in labels])).double()
+			else:
+				# yield 1 / class_sample_count
+				class_sample_count = np.bincount(labels)
+				weight = 1. / class_sample_count
+				samples_weight = torch.from_numpy(np.array([weight[t] for t in labels])).double()
+			print("train sampler weight:", samples_weight)
 			self.train_sampler = WeightedRandomSampler(samples_weight, len(samples_weight), replacement=True)
 	
 		val_transform = T.create_video_transform(
@@ -102,7 +118,7 @@ class SinusDataModule(pl.LightningDataModule):
 			std=std)
 		val_temporal_sample = T.TemporalRandomCrop(
 			self.configs.num_frames * self.configs.frame_interval)
-		self.val_dataset = self.get_dataset('stratified_valid.csv', val_transform, val_temporal_sample)
+		self.val_dataset = self.get_dataset(self.valid_csv, val_transform, val_temporal_sample)
 
 		test_transform = T.Compose([
 			T.Resize(scale_range=(-1, 256)),
@@ -112,7 +128,7 @@ class SinusDataModule(pl.LightningDataModule):
 			])
 		test_temporal_sample = T.TemporalRandomCrop(
 			self.configs.num_frames * self.configs.frame_interval)
-		self.test_dataset = self.get_dataset('stratified_test.csv', test_transform, test_temporal_sample)
+		self.test_dataset = self.get_dataset(self.test_csv, test_transform, test_temporal_sample)
 
 	def train_dataloader(self):
 		if self.sample_balance:

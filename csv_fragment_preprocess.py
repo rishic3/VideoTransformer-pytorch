@@ -2,8 +2,13 @@ import os
 import csv
 import re
 
-input_csvs = ['stratified_train.csv', 'stratified_valid.csv', 'stratified_test.csv'] 
-output_csv = ['fragment_train.csv', 'fragment_valid.csv', 'fragment_test.csv']
+input_csvs = ['/data/datasets/rishi/csv_store/stratified_train_seed3.csv', 
+                '/data/datasets/rishi/csv_store/stratified_valid_seed3.csv', 
+                '/data/datasets/rishi/csv_store/stratified_test_seed3.csv']
+output_csv = ['/data/datasets/rishi/cropped_video_fragments/fragment_train_seed3.csv',
+                '/data/datasets/rishi/cropped_video_fragments/fragment_valid_seed3.csv',
+                '/data/datasets/rishi/cropped_video_fragments/fragment_test_seed3.csv']
+min_frames = 16
 
 for input_csv, output_csv in zip(input_csvs, output_csv):
 
@@ -30,4 +35,5 @@ for input_csv, output_csv in zip(input_csvs, output_csv):
 
                         end_index = int(re.search(r'_(\d+).mp4$', fragment_file).group(1))
                         fragment_path = os.path.join(fragments_dir, fragment_file)
-                        writer.writerow([fragment_path, 0, end_index, label, caption])
+                        if end_index >= 16:
+                            writer.writerow([fragment_path, 0, end_index, label, caption])

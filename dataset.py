@@ -128,7 +128,7 @@ class Sinus(torch.utils.data.Dataset):
 				video_length = len(v_reader)
 
 				if video_length == 0 or video_length < self.target_video_len:
-					print(f"Warning: Video at index {index} has a length of {video_length} (too short). Skipping...")
+					#print(f"Warning: Video at index {index} has a length of {video_length} (too short). Skipping...")
 					index = random.randint(0, len(self.data) - 1)
 					continue
 				
